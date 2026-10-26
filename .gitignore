@@ -12,9 +12,9 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-.eggs/
-lib/
+/lib/
 lib64/
+!vision_assist_app/lib/**
 parts/
 sdist/
 var/
