@@ -9,6 +9,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:geolocator/geolocator.dart';
 import 'wadia_campus_navigation.dart';
@@ -387,6 +388,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
 
   // Live OCR State (Google ML Kit on-device)
   final TextRecognizer _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  late final ImageLabeler _imageLabeler = ImageLabeler(options: ImageLabelerOptions(confidenceThreshold: 0.40));
   bool _isOcrScanning = false;
   String _liveOcrResult = "Point camera at any signboard, room number or notice plate.";
 
@@ -602,6 +604,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
     _detectionTimer?.cancel();
     _cameraController?.dispose();
     _textRecognizer.close();
+    _imageLabeler.close();
     _speechRecognizer.stop();
     super.dispose();
   }
@@ -656,8 +659,8 @@ class _MainShellScreenState extends State<MainShellScreen> {
         }
 
         if (!backendSuccess && mounted) {
-          // Fallback to real-time on-device computer vision perception
-          final onDevice = await _analyzeFrameOnDevice(bytes);
+          // Accurate Real-Time Neural Network Perception (Google ML Kit on-device)
+          final onDevice = await _analyzeFrameOnDevice(bytes, photo.path);
           final label = onDevice['label'] as String;
           final dist = onDevice['distance'] as double;
           final dir = onDevice['direction'] as String;
@@ -678,12 +681,66 @@ class _MainShellScreenState extends State<MainShellScreen> {
     });
   }
 
-  Future<Map<String, dynamic>> _analyzeFrameOnDevice(Uint8List bytes) async {
+  Future<Map<String, dynamic>> _analyzeFrameOnDevice(Uint8List bytes, String photoPath) async {
     try {
+      // 1. Run Google ML Kit Neural Network directly on device to classify real object
+      final inputImage = InputImage.fromFilePath(photoPath);
+      final List<ImageLabel> labels = await _imageLabeler.processImage(inputImage);
+
+      String recognizedLabel = 'obstacle';
+      double highestConfidence = 0.0;
+      bool isBackground = false;
+
+      for (final l in labels) {
+        final text = l.label.toLowerCase();
+        final conf = l.confidence;
+
+        if (text.contains('floor') || text.contains('ceiling') || text.contains('sky') || text.contains('lighting') || text.contains('room')) {
+          if (conf > 0.70) isBackground = true;
+        }
+
+        if (conf > highestConfidence) {
+          if (text.contains('person') || text.contains('man') || text.contains('woman') || text.contains('face') || text.contains('human')) {
+            recognizedLabel = 'person';
+            highestConfidence = conf;
+          } else if (text.contains('chair') || text.contains('couch') || text.contains('sofa') || text.contains('bench') || text.contains('seat')) {
+            recognizedLabel = 'chair';
+            highestConfidence = conf;
+          } else if (text.contains('table') || text.contains('desk') || text.contains('furniture')) {
+            recognizedLabel = 'table';
+            highestConfidence = conf;
+          } else if (text.contains('door') || text.contains('doorway') || text.contains('entry') || text.contains('entrance')) {
+            recognizedLabel = 'door';
+            highestConfidence = conf;
+          } else if (text.contains('stair') || text.contains('step') || text.contains('handrail')) {
+            recognizedLabel = 'staircase';
+            highestConfidence = conf;
+          } else if (text.contains('car') || text.contains('vehicle') || text.contains('motorcycle') || text.contains('bicycle') || text.contains('wheel')) {
+            recognizedLabel = 'car';
+            highestConfidence = conf;
+          } else if (text.contains('tree') || text.contains('plant') || text.contains('flower') || text.contains('shrub')) {
+            recognizedLabel = 'tree';
+            highestConfidence = conf;
+          } else if (text.contains('bottle') || text.contains('cup') || text.contains('drink')) {
+            recognizedLabel = 'bottle';
+            highestConfidence = conf;
+          } else if (text.contains('bag') || text.contains('backpack') || text.contains('handbag')) {
+            recognizedLabel = 'backpack';
+            highestConfidence = conf;
+          } else if (text.contains('pole') || text.contains('column') || text.contains('pillar') || text.contains('post')) {
+            recognizedLabel = 'pole';
+            highestConfidence = conf;
+          }
+        }
+      }
+
+      // 2. Optical Spatial Gradient Analysis for Physical Proximity & Direction
       final codec = await ui.instantiateImageCodec(bytes, targetWidth: 64, targetHeight: 64);
       final frameInfo = await codec.getNextFrame();
       final byteData = await frameInfo.image.toByteData(format: ui.ImageByteFormat.rawRgba);
-      if (byteData == null) return {'label': 'clear', 'distance': 0.0, 'direction': 'ahead'};
+      if (byteData == null) {
+        return {'label': recognizedLabel, 'distance': 1.4, 'direction': 'ahead'};
+      }
 
       final pixels = byteData.buffer.asUint8List();
       double leftEdgeSum = 0;
@@ -735,25 +792,22 @@ class _MainShellScreenState extends State<MainShellScreen> {
         maxEdge = avgRight;
       }
 
-      double estimatedDistance = 0.0;
-      String obstacleType = 'clear';
+      // Check if scene is genuinely clear (no prominent foreground obstacle)
+      if (highestConfidence < 0.35 || (isBackground && maxEdge < 14.0)) {
+        return {'label': 'clear', 'distance': 0.0, 'direction': 'ahead'};
+      }
 
+      double estimatedDistance = 1.4;
       if (maxEdge >= 24.0) {
-        estimatedDistance = (0.7 + (40.0 - maxEdge.clamp(24.0, 40.0)) * 0.04).clamp(0.6, 1.2);
-        obstacleType = (avgCenter >= avgLeft && avgCenter >= avgRight) ? 'person' : 'obstacle';
+        estimatedDistance = (0.7 + (38.0 - maxEdge.clamp(24.0, 38.0)) * 0.04).clamp(0.6, 1.2);
       } else if (maxEdge >= 16.0) {
         estimatedDistance = (1.3 + (24.0 - maxEdge) * 0.06).clamp(1.2, 1.8);
-        obstacleType = (avgLeft > avgRight) ? 'door' : 'chair';
-      } else if (maxEdge >= 11.0) {
-        estimatedDistance = (1.9 + (16.0 - maxEdge) * 0.08).clamp(1.8, 2.6);
-        obstacleType = 'staircase';
       } else {
-        obstacleType = 'clear';
-        estimatedDistance = 0.0;
+        estimatedDistance = (1.9 + (16.0 - maxEdge.clamp(8.0, 16.0)) * 0.08).clamp(1.8, 2.5);
       }
 
       return {
-        'label': obstacleType,
+        'label': recognizedLabel,
         'distance': estimatedDistance,
         'direction': direction,
       };
