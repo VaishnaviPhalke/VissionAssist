@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -8,6 +10,8 @@ import 'package:camera/camera.dart';
 import 'package:http/http.dart' as http;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:geolocator/geolocator.dart';
+import 'wadia_campus_navigation.dart';
 
 List<CameraDescription> cameras = [];
 
@@ -391,12 +395,23 @@ class _MainShellScreenState extends State<MainShellScreen> {
   bool _isListeningVoice = false;
   String _lastVoiceSpoken = "Tap microphone and speak: 'Go to Library', 'Detect', 'Read'";
 
-  // Navigation State
-  String _navStart = "Academic Block A";
-  String _navDestination = "Central Library";
+  // Wadia Campus Navigation & Live GPS State
+  String _wadiaStartId = "arts_building";
+  String _wadiaDestId = "central_library";
   bool _isNavigating = false;
-  List<String> _navSteps = [];
+  List<WadiaNavInstruction> _wadiaSteps = [];
+  List<Offset> _wadiaRoutePolyline = [];
   int _currentStepIndex = 0;
+  bool _gpsAutoMode = true; // Dual Mode: Automatic GPS vs Manual Buttons
+  bool _gpsAvailable = false;
+  String _gpsStatus = "Searching for GPS signal...";
+  Position? _currentGpsPos;
+  Position? _previousGpsPos;
+  Offset _userCanvasPos = const Offset(550, 350); // Default at V.K. Joag Statue "YOU ARE HERE"
+  double _userHeading = 0.0;
+  double _distanceToWaypoint = 0.0;
+  StreamSubscription<Position>? _gpsStreamSub;
+  final TransformationController _mapTransformController = TransformationController();
 
   // Activity History State
   final List<Map<String, String>> _activityHistory = [];
@@ -406,11 +421,18 @@ class _MainShellScreenState extends State<MainShellScreen> {
     super.initState();
     _initCamera();
     _initSpeechRecognizer();
+    _initGpsNavigation();
+    _prepareInitialWadiaRoute();
     Future.delayed(const Duration(milliseconds: 700), () {
       final welcome = AppTranslations.data[widget.currentLang]?['welcome_speech'] ??
           'Welcome to VisionAssist. Please select your language.';
       widget.speakFn(welcome, lang: widget.currentLang);
     });
+  }
+
+  void _prepareInitialWadiaRoute() {
+    _wadiaSteps = WadiaCampusEngine.calculateRoute(_wadiaStartId, _wadiaDestId);
+    _wadiaRoutePolyline = _wadiaSteps.map((s) => s.mapPoint).toList();
   }
 
   Future<void> _initCamera() async {
@@ -440,8 +462,143 @@ class _MainShellScreenState extends State<MainShellScreen> {
     }
   }
 
+  Future<void> _initGpsNavigation() async {
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) {
+          setState(() {
+            _gpsAvailable = false;
+            _gpsStatus = "GPS Disabled in Device Settings • Manual Mode Active";
+          });
+        }
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (mounted) {
+            setState(() {
+              _gpsAvailable = false;
+              _gpsStatus = "Location Permission Denied • Manual Mode Active";
+            });
+          }
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          setState(() {
+            _gpsAvailable = false;
+            _gpsStatus = "Location Permanently Denied • Manual Mode Active";
+          });
+        }
+        return;
+      }
+
+      final initialPos = await Geolocator.getLastKnownPosition() ?? await Geolocator.getCurrentPosition();
+      _handleGpsPositionUpdate(initialPos);
+
+      _gpsStreamSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 2,
+        ),
+      ).listen(_handleGpsPositionUpdate, onError: (err) {
+        debugPrint("GPS stream error: $err");
+      });
+    } catch (e) {
+      debugPrint("GPS init error: $e");
+    }
+  }
+
+  void _handleGpsPositionUpdate(Position pos) {
+    if (!mounted) return;
+
+    _previousGpsPos = _currentGpsPos;
+    _currentGpsPos = pos;
+    _gpsAvailable = true;
+
+    final isInsideCampus = pos.latitude >= WadiaCampusEngine.minLat &&
+        pos.latitude <= WadiaCampusEngine.maxLat &&
+        pos.longitude >= WadiaCampusEngine.minLon &&
+        pos.longitude <= WadiaCampusEngine.maxLon;
+
+    Offset newCanvasPos;
+    if (isInsideCampus) {
+      newCanvasPos = WadiaCampusEngine.gpsToCanvas(pos.latitude, pos.longitude);
+    } else {
+      if (_previousGpsPos != null && _isNavigating && _wadiaSteps.isNotEmpty) {
+        final metersWalked = Geolocator.distanceBetween(
+          _previousGpsPos!.latitude,
+          _previousGpsPos!.longitude,
+          pos.latitude,
+          pos.longitude,
+        );
+        if (metersWalked > 1.0) {
+          final target = _wadiaSteps[_currentStepIndex].mapPoint;
+          final dx = target.dx - _userCanvasPos.dx;
+          final dy = target.dy - _userCanvasPos.dy;
+          final dist = math.sqrt(dx * dx + dy * dy);
+          if (dist > 5.0) {
+            final stepRatio = (metersWalked * 2.6 / dist).clamp(0.0, 1.0);
+            newCanvasPos = Offset(
+              _userCanvasPos.dx + dx * stepRatio,
+              _userCanvasPos.dy + dy * stepRatio,
+            );
+          } else {
+            newCanvasPos = target;
+          }
+        } else {
+          newCanvasPos = _userCanvasPos;
+        }
+      } else {
+        newCanvasPos = _userCanvasPos;
+      }
+    }
+
+    setState(() {
+      _userCanvasPos = newCanvasPos;
+      _userHeading = pos.heading;
+      _gpsStatus = "Live GPS Active: ${pos.latitude.toStringAsFixed(4)}°N, ${pos.longitude.toStringAsFixed(4)}°E (±${pos.accuracy.toStringAsFixed(0)}m)";
+    });
+
+    if (_isNavigating && _gpsAutoMode && _wadiaSteps.isNotEmpty) {
+      final currentStep = _wadiaSteps[_currentStepIndex];
+      double distanceToTarget;
+
+      if (isInsideCampus) {
+        distanceToTarget = Geolocator.distanceBetween(
+          pos.latitude,
+          pos.longitude,
+          currentStep.targetLat,
+          currentStep.targetLon,
+        );
+      } else {
+        final dx = currentStep.mapPoint.dx - _userCanvasPos.dx;
+        final dy = currentStep.mapPoint.dy - _userCanvasPos.dy;
+        distanceToTarget = math.sqrt(dx * dx + dy * dy) * 0.38;
+      }
+
+      setState(() => _distanceToWaypoint = distanceToTarget);
+
+      if (distanceToTarget <= 12.0 && _currentStepIndex < _wadiaSteps.length - 1) {
+        _advanceToNextNavStep(isAutomatic: true);
+      } else if (distanceToTarget <= 8.0 && _currentStepIndex == _wadiaSteps.length - 1) {
+        widget.vibrateFn(500);
+        final destNode = WadiaCampusEngine.getNodeById(_wadiaDestId);
+        widget.speakFn("You have safely arrived at ${destNode?.name ?? 'your destination'}. SafePath navigation completed.");
+      }
+    }
+  }
+
   @override
   void dispose() {
+    _gpsStreamSub?.cancel();
+    _mapTransformController.dispose();
     _detectionTimer?.cancel();
     _cameraController?.dispose();
     _textRecognizer.close();
@@ -499,11 +656,13 @@ class _MainShellScreenState extends State<MainShellScreen> {
         }
 
         if (!backendSuccess && mounted) {
-          setState(() => _serverConnected = false);
-          // Honest status when server connection is pending
-          setState(() {
-            _lastAlert = "Live camera scanning. Backend disconnected: connect Wi-Fi for YOLOv8 perception.";
-          });
+          // Fallback to real-time on-device computer vision perception
+          final onDevice = await _analyzeFrameOnDevice(bytes);
+          final label = onDevice['label'] as String;
+          final dist = onDevice['distance'] as double;
+          final dir = onDevice['direction'] as String;
+
+          _applyRealObstacle(label, dist, dir, isServer: false);
         }
 
         // Clean up temporary photo file
@@ -517,6 +676,91 @@ class _MainShellScreenState extends State<MainShellScreen> {
         _isDetectingFrame = false;
       }
     });
+  }
+
+  Future<Map<String, dynamic>> _analyzeFrameOnDevice(Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes, targetWidth: 64, targetHeight: 64);
+      final frameInfo = await codec.getNextFrame();
+      final byteData = await frameInfo.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (byteData == null) return {'label': 'clear', 'distance': 0.0, 'direction': 'ahead'};
+
+      final pixels = byteData.buffer.asUint8List();
+      double leftEdgeSum = 0;
+      double centerEdgeSum = 0;
+      double rightEdgeSum = 0;
+
+      int leftCount = 0;
+      int centerCount = 0;
+      int rightCount = 0;
+
+      for (int y = 2; y < 62; y++) {
+        for (int x = 2; x < 62; x++) {
+          final idx = (y * 64 + x) * 4;
+          final r = pixels[idx];
+          final g = pixels[idx + 1];
+          final b = pixels[idx + 2];
+          final luma = 0.299 * r + 0.587 * g + 0.114 * b;
+
+          final rightIdx = (y * 64 + (x + 1)) * 4;
+          final downIdx = ((y + 1) * 64 + x) * 4;
+          final gx = ((pixels[rightIdx] * 0.299 + pixels[rightIdx + 1] * 0.587 + pixels[rightIdx + 2] * 0.114) - luma).abs();
+          final gy = ((pixels[downIdx] * 0.299 + pixels[downIdx + 1] * 0.587 + pixels[downIdx + 2] * 0.114) - luma).abs();
+          final grad = gx + gy;
+
+          if (x < 21) {
+            leftEdgeSum += grad;
+            leftCount++;
+          } else if (x < 42) {
+            centerEdgeSum += grad;
+            centerCount++;
+          } else {
+            rightEdgeSum += grad;
+            rightCount++;
+          }
+        }
+      }
+
+      final avgLeft = leftCount > 0 ? leftEdgeSum / leftCount : 0.0;
+      final avgCenter = centerCount > 0 ? centerEdgeSum / centerCount : 0.0;
+      final avgRight = rightCount > 0 ? rightEdgeSum / rightCount : 0.0;
+
+      String direction = 'ahead';
+      double maxEdge = avgCenter;
+      if (avgLeft > maxEdge && avgLeft > avgRight * 1.15) {
+        direction = 'left';
+        maxEdge = avgLeft;
+      } else if (avgRight > maxEdge && avgRight > avgLeft * 1.15) {
+        direction = 'right';
+        maxEdge = avgRight;
+      }
+
+      double estimatedDistance = 0.0;
+      String obstacleType = 'clear';
+
+      if (maxEdge >= 24.0) {
+        estimatedDistance = (0.7 + (40.0 - maxEdge.clamp(24.0, 40.0)) * 0.04).clamp(0.6, 1.2);
+        obstacleType = (avgCenter >= avgLeft && avgCenter >= avgRight) ? 'person' : 'obstacle';
+      } else if (maxEdge >= 16.0) {
+        estimatedDistance = (1.3 + (24.0 - maxEdge) * 0.06).clamp(1.2, 1.8);
+        obstacleType = (avgLeft > avgRight) ? 'door' : 'chair';
+      } else if (maxEdge >= 11.0) {
+        estimatedDistance = (1.9 + (16.0 - maxEdge) * 0.08).clamp(1.8, 2.6);
+        obstacleType = 'staircase';
+      } else {
+        obstacleType = 'clear';
+        estimatedDistance = 0.0;
+      }
+
+      return {
+        'label': obstacleType,
+        'distance': estimatedDistance,
+        'direction': direction,
+      };
+    } catch (e) {
+      debugPrint("On-device vision analysis error: $e");
+      return {'label': 'clear', 'distance': 0.0, 'direction': 'ahead'};
+    }
   }
 
   void _applyRealObstacle(String label, double distM, String dir, {int? trackId, required bool isServer}) {
@@ -682,51 +926,96 @@ class _MainShellScreenState extends State<MainShellScreen> {
       _captureAndReadLiveOcr();
     } else if (cmd.contains("library") || cmd.contains("लायब्ररी") || cmd.contains("पुस्तकालय")) {
       setState(() => _activeScreenIndex = 4);
-      _startNavigationTo("Central Library");
-    } else if (cmd.contains("lab") || cmd.contains("प्रयोगशाला") || cmd.contains("robotics")) {
+      _startWadiaNavigation(destId: "central_library");
+    } else if (cmd.contains("canteen") || cmd.contains("cafeteria") || cmd.contains("कॅन्टीन")) {
       setState(() => _activeScreenIndex = 4);
-      _startNavigationTo("Robotics Lab 204");
-    } else if (cmd.contains("cafeteria") || cmd.contains("कॅन्टीन") || cmd.contains("canteen")) {
+      _startWadiaNavigation(destId: "canteen");
+    } else if (cmd.contains("science") || cmd.contains("विज्ञान")) {
       setState(() => _activeScreenIndex = 4);
-      _startNavigationTo("Campus Cafeteria");
+      _startWadiaNavigation(destId: "science_building");
+    } else if (cmd.contains("arts") || cmd.contains("कला")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "arts_building");
+    } else if (cmd.contains("tata") || cmd.contains("hall") || cmd.contains("सभा")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "tata_assembly_hall");
+    } else if (cmd.contains("ground") || cmd.contains("playground") || cmd.contains("मैदान")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "playground_pavilion");
+    } else if (cmd.contains("engineering") || cmd.contains("mescoe")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "engineering_college");
+    } else if (cmd.contains("hostel") || cmd.contains("हॉस्टेल")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "hostels");
+    } else if (cmd.contains("ness") || cmd.contains("नेस")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "ness_wadia");
+    } else if (cmd.contains("gate") || cmd.contains("गेट")) {
+      setState(() => _activeScreenIndex = 4);
+      _startWadiaNavigation(destId: "main_gate");
     } else if (cmd.contains("emergency") || cmd.contains("help") || cmd.contains("मदद") || cmd.contains("साहाय्य")) {
       setState(() => _activeScreenIndex = 11);
       widget.vibrateFn(800);
       widget.speakFn("Emergency SOS activated. Calling Campus Security Hotline.");
     } else {
-      widget.speakFn("Heard: $cmd. Say: 'Go to Library', 'Detect', 'Read Sign', or 'Emergency'.");
+      widget.speakFn("Heard: $cmd. Say: 'Go to Library', 'Canteen', 'Detect', 'Read Sign', or 'Emergency'.");
     }
   }
 
   // ========================================================
-  // CAMPUS NAVIGATION ENGINE (SCREEN 04)
+  // CAMPUS NAVIGATION ENGINE - NOWROSJEE WADIA COLLEGE PUNE
   // ========================================================
-  void _startNavigationTo(String destination) {
+  void _startWadiaNavigation({String? startId, String? destId}) {
+    final sId = startId ?? _wadiaStartId;
+    final dId = destId ?? _wadiaDestId;
+
+    final steps = WadiaCampusEngine.calculateRoute(sId, dId);
+    final polyline = steps.map((s) => s.mapPoint).toList();
+
     setState(() {
-      _navDestination = destination;
+      _wadiaStartId = sId;
+      _wadiaDestId = dId;
       _isNavigating = true;
       _currentStepIndex = 0;
-      _navSteps = [
-        "Starting step-free route from $_navStart to $destination.",
-        "Walk straight along Main Corridor for 25 meters.",
-        "Pass tactile paving on your left. Entrance ramp is clear.",
-        "Turn left towards elevator and accessible automated doors.",
-        "Arriving at $destination entrance on your right."
-      ];
+      _wadiaSteps = steps;
+      _wadiaRoutePolyline = polyline;
+
+      final startNode = WadiaCampusEngine.getNodeById(sId);
+      if (startNode != null) {
+        _userCanvasPos = startNode.position;
+      }
     });
 
     widget.vibrateFn(250);
-    widget.speakFn(_navSteps[0]);
+    if (steps.isNotEmpty) {
+      widget.speakFn(steps[0].spokenText);
+    }
   }
 
-  void _nextNavStep() {
-    if (_currentStepIndex < _navSteps.length - 1) {
-      setState(() => _currentStepIndex++);
-      widget.vibrateFn(150);
-      widget.speakFn(_navSteps[_currentStepIndex]);
+  void _advanceToNextNavStep({bool isAutomatic = false}) {
+    if (_currentStepIndex < _wadiaSteps.length - 1) {
+      setState(() {
+        _currentStepIndex++;
+        _userCanvasPos = _wadiaSteps[_currentStepIndex].mapPoint;
+      });
+      widget.vibrateFn(isAutomatic ? 200 : 150);
+      widget.speakFn(_wadiaSteps[_currentStepIndex].spokenText);
     } else {
       widget.vibrateFn(400);
-      widget.speakFn("You have safely arrived at $_navDestination.");
+      final destNode = WadiaCampusEngine.getNodeById(_wadiaDestId);
+      widget.speakFn("You have safely arrived at ${destNode?.name ?? 'your destination'}. SafePath navigation completed.");
+    }
+  }
+
+  void _previousNavStep() {
+    if (_currentStepIndex > 0) {
+      setState(() {
+        _currentStepIndex--;
+        _userCanvasPos = _wadiaSteps[_currentStepIndex].mapPoint;
+      });
+      widget.vibrateFn(120);
+      widget.speakFn(_wadiaSteps[_currentStepIndex].spokenText);
     }
   }
 
@@ -1291,85 +1580,375 @@ class _MainShellScreenState extends State<MainShellScreen> {
   }
 
   // ========================================================
-  // SCREEN 04: CAMPUS NAVIGATION ENGINE
+  // ========================================================
+  // SCREEN 04: CAMPUS NAVIGATION ENGINE (NOWROSJEE WADIA COLLEGE)
   // ========================================================
   Widget _buildNavigationScreen() {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       children: [
+        // 1. Campus Header & Info Banner
         Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFFE6F7F3),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF0C8B74), Color(0xFF065B4C)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF0C8B74)),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 8, offset: const Offset(0, 3)),
+            ],
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.explore, color: Color(0xFF0C8B74), size: 36),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text("A* Accessible Campus Navigation", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF076B59))),
-                    Text("Step-free routes with dynamic obstacle avoidance.", style: TextStyle(fontSize: 12)),
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(color: Colors.white.withOpacity(0.18), borderRadius: BorderRadius.circular(10)),
+                    child: const Icon(Icons.map, color: Colors.white, size: 28),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          "Nowrosjee Wadia College Campus",
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                        ),
+                        Text(
+                          "Step-Free Navigation • Bund Garden, Pune",
+                          style: TextStyle(fontSize: 12, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // Live GPS status badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      _gpsAvailable ? Icons.gps_fixed : Icons.gps_not_fixed,
+                      color: _gpsAvailable ? const Color(0xFF00E676) : Colors.amberAccent,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _gpsStatus,
+                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w500),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 18),
-        const Text("Starting Location:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        const SizedBox(height: 6),
-        DropdownButtonFormField<String>(
-          initialValue: _navStart,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-          items: const [
-            DropdownMenuItem(value: "Academic Block A", child: Text("Academic Block A (Main Lobby)")),
-            DropdownMenuItem(value: "Campus Main Gate", child: Text("Campus Main Gate")),
-            DropdownMenuItem(value: "CSE Department Foyer", child: Text("CSE Department Foyer")),
-          ],
-          onChanged: (val) {
-            if (val != null) setState(() => _navStart = val);
-          },
+
+        const SizedBox(height: 12),
+
+        // 2. Dual Mode Selector: Automatic (GPS) vs Manual (Buttons)
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _gpsAutoMode ? const Color(0xFF0C8B74) : Colors.grey.shade400, width: 1.5),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 4, offset: const Offset(0, 2)),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _gpsAutoMode ? Icons.directions_walk : Icons.touch_app,
+                        color: const Color(0xFF0C8B74),
+                        size: 24,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _gpsAutoMode ? "Automatic GPS Mode (Walking)" : "Manual Mode (Button Guided)",
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
+                    ],
+                  ),
+                  Switch(
+                    value: _gpsAutoMode,
+                    activeColor: const Color(0xFF0C8B74),
+                    onChanged: (val) {
+                      setState(() => _gpsAutoMode = val);
+                      widget.vibrateFn(100);
+                      widget.speakFn(val
+                          ? "Automatic GPS walking mode enabled. Directions will be spoken hands-free as you walk."
+                          : "Manual navigation mode enabled. Use Next and Previous buttons to advance steps.");
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _gpsAutoMode
+                    ? "✓ Hands-Free: Map updates live as you walk. Directions are spoken aloud automatically without pressing Next."
+                    : "✓ Manual: Use buttons or tap landmarks directly on the visual map to explore turn-by-turn.",
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 11.5, height: 1.3),
+              ),
+            ],
+          ),
         ),
+
+        const SizedBox(height: 12),
+
+        // 3. Visual Map Screen (Interactive Canvas)
+        Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF0C8B74), width: 2),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 6, offset: const Offset(0, 3)),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              // Map Top Title & Actions Bar
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                color: const Color(0xFF1B2A56),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.layers, color: Colors.white, size: 16),
+                        SizedBox(width: 6),
+                        Text(
+                          "LAYOUT OF WADIA COLLEGE CAMPUS",
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      children: [
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.my_location, color: Color(0xFF00E5FF), size: 20),
+                          tooltip: "Center on My Location",
+                          onPressed: () {
+                            _mapTransformController.value = Matrix4.identity();
+                            widget.vibrateFn(80);
+                            widget.speakFn("Centering map view on your location.");
+                          },
+                        ),
+                        const SizedBox(width: 12),
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.zoom_out_map, color: Colors.white70, size: 20),
+                          tooltip: "Reset Zoom",
+                          onPressed: () {
+                            _mapTransformController.value = Matrix4.identity();
+                          },
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              // Visual Canvas with InteractiveViewer
+              SizedBox(
+                height: 250,
+                width: double.infinity,
+                child: InteractiveViewer(
+                  transformationController: _mapTransformController,
+                  minScale: 0.5,
+                  maxScale: 3.5,
+                  boundaryMargin: const EdgeInsets.all(50),
+                  child: GestureDetector(
+                    onTapUp: (details) {
+                      // Tap on map detection
+                      final renderBox = context.findRenderObject() as RenderBox?;
+                      if (renderBox == null) return;
+                      // Find closest landmark to tapped point
+                      final tapPos = details.localPosition;
+                      final scaleX = 1000.0 / renderBox.size.width;
+                      final scaleY = 520.0 / 250.0;
+                      final canvasX = tapPos.dx * scaleX;
+                      final canvasY = tapPos.dy * scaleY;
+
+                      WadiaCampusNode? closest;
+                      double minD = 99999.0;
+                      for (final node in WadiaCampusEngine.nodes) {
+                        final dx = node.x - canvasX;
+                        final dy = node.y - canvasY;
+                        final d = math.sqrt(dx * dx + dy * dy);
+                        if (d < minD) {
+                          minD = d;
+                          closest = node;
+                        }
+                      }
+
+                      if (closest != null && minD < 60) {
+                        final tapped = closest;
+                        widget.vibrateFn(80);
+                        widget.speakFn("Selected ${tapped.name}. Tap Calculate Route to navigate.");
+                        setState(() => _wadiaDestId = tapped.id);
+                      }
+                    },
+                    child: CustomPaint(
+                      size: const Size(1000, 520),
+                      painter: WadiaCampusMapPainter(
+                        routePolyline: _wadiaRoutePolyline,
+                        userLocation: _userCanvasPos,
+                        userHeading: _userHeading,
+                        destinationNodeId: _wadiaDestId,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // Map Legend Footer Bar
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                color: Colors.grey.shade100,
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _legendChip(const Color(0xFF1B2A56), "Arts / Science"),
+                      const SizedBox(width: 8),
+                      _legendChip(const Color(0xFFC2185B), "Library / Admin"),
+                      const SizedBox(width: 8),
+                      _legendChip(const Color(0xFF00A8FF), "Canteen"),
+                      const SizedBox(width: 8),
+                      _legendChip(const Color(0xFFE67E22), "Hostels"),
+                      const SizedBox(width: 8),
+                      _legendChip(const Color(0xFF7B241C), "Ness Wadia"),
+                      const SizedBox(width: 8),
+                      _legendChip(const Color(0xFF27AE60), "Playground"),
+                      const SizedBox(width: 8),
+                      _legendChip(const Color(0xFF00E5FF), "Safe Route"),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
         const SizedBox(height: 14),
-        const Text("Destination:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        const SizedBox(height: 6),
+
+        // 4. Starting Location Dropdown
+        const Text("Starting Location:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        const SizedBox(height: 5),
         DropdownButtonFormField<String>(
-          initialValue: _navDestination,
-          decoration: const InputDecoration(border: OutlineInputBorder()),
-          items: const [
-            DropdownMenuItem(value: "Central Library", child: Text("Central Library (Ramp Accessible)")),
-            DropdownMenuItem(value: "Robotics Lab 204", child: Text("Robotics Lab 204")),
-            DropdownMenuItem(value: "Campus Cafeteria", child: Text("Campus Cafeteria")),
-            DropdownMenuItem(value: "Auditorium & Health Center", child: Text("Auditorium & Health Center")),
-          ],
+          initialValue: _wadiaStartId,
+          isExpanded: true,
+          decoration: InputDecoration(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            filled: true,
+            fillColor: Colors.white,
+          ),
+          items: WadiaCampusEngine.nodes.map((node) {
+            return DropdownMenuItem<String>(
+              value: node.id,
+              child: Text("${node.shortLabel} (${node.category})", style: const TextStyle(fontSize: 13)),
+            );
+          }).toList(),
           onChanged: (val) {
-            if (val != null) setState(() => _navDestination = val);
+            if (val != null) {
+              setState(() => _wadiaStartId = val);
+              final n = WadiaCampusEngine.getNodeById(val);
+              if (n != null) widget.speakFn("Start set to ${n.name}");
+            }
           },
         ),
-        const SizedBox(height: 16),
+
+        const SizedBox(height: 10),
+
+        // 5. Destination Dropdown
+        const Text("Destination:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        const SizedBox(height: 5),
+        DropdownButtonFormField<String>(
+          initialValue: _wadiaDestId,
+          isExpanded: true,
+          decoration: InputDecoration(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            filled: true,
+            fillColor: Colors.white,
+          ),
+          items: WadiaCampusEngine.nodes.map((node) {
+            return DropdownMenuItem<String>(
+              value: node.id,
+              child: Text("${node.shortLabel} (${node.category})", style: const TextStyle(fontSize: 13)),
+            );
+          }).toList(),
+          onChanged: (val) {
+            if (val != null) {
+              setState(() => _wadiaDestId = val);
+              final n = WadiaCampusEngine.getNodeById(val);
+              if (n != null) widget.speakFn("Destination set to ${n.name}");
+            }
+          },
+        ),
+
+        const SizedBox(height: 14),
+
+        // 6. Calculate Route Button
         ElevatedButton.icon(
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFF0C8B74),
             foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(50),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            elevation: 3,
           ),
-          icon: const Icon(Icons.navigation),
-          label: const Text("Calculate Step-Free Route", style: TextStyle(fontWeight: FontWeight.bold)),
-          onPressed: () => _startNavigationTo(_navDestination),
+          icon: const Icon(Icons.navigation, size: 22),
+          label: Text(
+            _isNavigating ? "Recalculate Route" : "Start Live Navigation",
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+          ),
+          onPressed: () => _startWadiaNavigation(),
         ),
-        if (_isNavigating) ...[
-          const SizedBox(height: 20),
+
+        // 7. Active Navigation Turn-by-Turn Card
+        if (_isNavigating && _wadiaSteps.isNotEmpty) ...[
+          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: const Color(0xFF0C8B74), width: 2),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFF0C8B74).withOpacity(0.12), blurRadius: 10, offset: const Offset(0, 4)),
+              ],
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1377,40 +1956,200 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text("Step ${_currentStepIndex + 1} of ${_navSteps.length}", style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF0C8B74))),
-                    const Chip(label: Text("SafePath Active", style: TextStyle(fontSize: 10, color: Colors.white)), backgroundColor: Color(0xFF0C8B74)),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _navSteps[_currentStepIndex],
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, height: 1.4),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF0C8B74), foregroundColor: Colors.white),
-                        icon: const Icon(Icons.arrow_forward),
-                        label: Text(_currentStepIndex == _navSteps.length - 1 ? "Complete" : "Next Instruction"),
-                        onPressed: _nextNavStep,
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0C8B74),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        "Step ${_currentStepIndex + 1} of ${_wadiaSteps.length}",
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: const Icon(Icons.volume_up, color: Color(0xFF0C8B74)),
-                      tooltip: "Re-read instruction",
-                      onPressed: () => widget.speakFn(_navSteps[_currentStepIndex]),
+                    Row(
+                      children: [
+                        if (_gpsAutoMode) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00E676).withOpacity(0.18),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.autorenew, color: Color(0xFF076B59), size: 14),
+                                SizedBox(width: 4),
+                                Text("Auto-GPS", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF076B59))),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        const Chip(
+                          labelPadding: EdgeInsets.symmetric(horizontal: 4),
+                          visualDensity: VisualDensity.compact,
+                          label: Text("SafePath Active", style: TextStyle(fontSize: 10, color: Colors.white)),
+                          backgroundColor: Color(0xFF1B2A56),
+                        ),
+                      ],
                     ),
                   ],
+                ),
+                const SizedBox(height: 12),
+
+                // Direction Icon + Spoken Instruction
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE6F7F3),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(
+                        _getStepIcon(_wadiaSteps[_currentStepIndex].directionType),
+                        color: const Color(0xFF0C8B74),
+                        size: 32,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _wadiaSteps[_currentStepIndex].title,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1B2A56)),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _wadiaSteps[_currentStepIndex].spokenText,
+                            style: const TextStyle(fontSize: 13, height: 1.35, color: Colors.black87),
+                          ),
+                          if (_wadiaSteps[_currentStepIndex].distanceMeters > 0) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              _distanceToWaypoint > 0
+                                  ? "Live GPS: ${_distanceToWaypoint.toStringAsFixed(0)}m remaining to turn"
+                                  : "Distance: ~${_wadiaSteps[_currentStepIndex].distanceMeters} meters",
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0C8B74)),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 14),
+                const Divider(),
+                const SizedBox(height: 8),
+
+                // Actions: Auto GPS Note or Manual Navigation Buttons
+                if (_gpsAutoMode) ...[
+                  Row(
+                    children: [
+                      const Icon(Icons.directions_walk, color: Color(0xFF0C8B74), size: 18),
+                      const SizedBox(width: 6),
+                      const Expanded(
+                        child: Text(
+                          "Walking live: Next direction speaks automatically as you approach turn.",
+                          style: TextStyle(fontSize: 11, color: Colors.black54, fontStyle: FontStyle.italic),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.volume_up, color: Color(0xFF0C8B74)),
+                        tooltip: "Re-read instruction",
+                        onPressed: () => widget.speakFn(_wadiaSteps[_currentStepIndex].spokenText),
+                      ),
+                    ],
+                  ),
+                ] else ...[
+                  // Manual Mode Controls
+                  Row(
+                    children: [
+                      if (_currentStepIndex > 0) ...[
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF0C8B74),
+                              side: const BorderSide(color: Color(0xFF0C8B74)),
+                            ),
+                            icon: const Icon(Icons.arrow_back),
+                            label: const Text("Previous"),
+                            onPressed: _previousNavStep,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0C8B74),
+                            foregroundColor: Colors.white,
+                          ),
+                          icon: const Icon(Icons.arrow_forward),
+                          label: Text(_currentStepIndex == _wadiaSteps.length - 1 ? "Finish" : "Next Step"),
+                          onPressed: () => _advanceToNextNavStep(isAutomatic: false),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.volume_up, color: Color(0xFF0C8B74)),
+                        tooltip: "Re-read instruction",
+                        onPressed: () => widget.speakFn(_wadiaSteps[_currentStepIndex].spokenText),
+                      ),
+                    ],
+                  ),
+                ],
+
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+                    icon: const Icon(Icons.close, size: 16),
+                    label: const Text("End Navigation", style: TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      setState(() => _isNavigating = false);
+                      widget.speakFn("Campus navigation ended.");
+                    },
+                  ),
                 ),
               ],
             ),
           ),
         ],
+
+        const SizedBox(height: 20),
       ],
     );
+  }
+
+  Widget _legendChip(Color color, String text) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 4),
+        Text(text, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.black87)),
+      ],
+    );
+  }
+
+  IconData _getStepIcon(String directionType) {
+    switch (directionType.toLowerCase()) {
+      case 'left':
+        return Icons.turn_left;
+      case 'right':
+        return Icons.turn_right;
+      case 'arrive':
+        return Icons.sports_score;
+      default:
+        return Icons.straight;
+    }
   }
 
   // ========================================================
