@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionAssist AI 2.0 — Backend & MLOps API</title>
+  <style>
+    :root {
+      --primary: #0C8B74;
+      --primary-dark: #076B59;
+      --bg: #F8FAFB;
+      --card-bg: #FFFFFF;
+      --text: #1E293B;
+      --text-muted: #64748B;
+      --border: #E2E8F0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background-color: var(--bg); color: var(--text); padding: 40px 20px; line-height: 1.6; }
+    .container { max-width: 900px; margin: 0 auto; }
+    header { background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: white; padding: 36px 32px; border-radius: 16px; margin-bottom: 30px; box-shadow: 0 10px 25px rgba(12, 139, 116, 0.15); }
+    h1 { font-size: 28px; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+    .badge { display: inline-block; background: rgba(255, 255, 255, 0.2); padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .tagline { opacity: 0.9; font-size: 15px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 24px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.02); transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .card:hover { transform: translateY(-3px); box-shadow: 0 8px 16px rgba(0, 0, 0, 0.06); }
+    .card h3 { font-size: 18px; margin-bottom: 10px; color: var(--primary-dark); display: flex; align-items: center; gap: 8px; }
+    .card p { font-size: 14px; color: var(--text-muted); margin-bottom: 16px; }
+    .btn { display: inline-block; background: var(--primary); color: white; text-decoration: none; padding: 10px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; transition: background 0.2s; }
+    .btn:hover { background: var(--primary-dark); }
+    .btn-outline { background: transparent; color: var(--primary); border: 1.5px solid var(--primary); }
+    .btn-outline:hover { background: #E6F7F3; }
+    .status-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: #16A34A; }
+    .status-dot { width: 8px; height: 8px; background: #16A34A; border-radius: 50%; }
+    pre { background: #0F172A; color: #E2E8F0; padding: 16px; border-radius: 10px; overflow-x: auto; font-size: 13px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px;">
+        <div>
+          <h1>👁️‍🗨️ VisionAssist AI 2.0</h1>
+          <p class="tagline">Backend REST Services, SAFE-Loop MLOps & Campus Navigation Gateway</p>
+        </div>
+        <span class="badge">API v2.0 · Production</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <h3>📖 Interactive API Docs</h3>
+        <p>Full interactive OpenAPI/Swagger specification testing endpoints for object detection, A* navigation, and OCR.</p>
+        <div style="display: flex; gap: 10px;">
+          <a class="btn" href="/docs" target="_blank">Swagger UI</a>
+          <a class="btn btn-outline" href="/redoc" target="_blank">ReDoc</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📱 Native Android APK</h3>
+        <p>Compiled release APK (45.2 MB) featuring 12 accessibility screens, YOLOv8 vision HUD, and multilingual voice.</p>
+        <a class="btn" href="/VisionAssist_AI.apk" download>Download APK</a>
+      </div>
+
+      <div class="card">
+        <h3>📊 MLOps & Model Registry</h3>
+        <p>Continuous SAFE-Loop governance, drift detection, benchmark audits, and versioned YOLOv8 checkpoints.</p>
+        <a class="btn btn-outline" href="/api/mlops/metrics" target="_blank">View Metrics JSON</a>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 24px;">
+      <h3>⚡ System Health & Endpoints Status</h3>
+      <div style="margin: 14px 0;" class="status-pill">
+        <span class="status-dot"></span> All Services Operational (FastAPI + YOLOv8 + Navigation Graph)
+      </div>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <tr style="border-bottom: 1px solid var(--border);">
+          <th style="text-align: left; padding: 10px 0;">Method / Endpoint</th>
+          <th style="text-align: left; padding: 10px 0;">Description</th>
+          <th style="text-align: right; padding: 10px 0;">Direct Test</th>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding: 10px 0;"><code>GET /api/health</code></td>
+          <td style="color: var(--text-muted);">Health check & active detector engine status</td>
+          <td style="text-align: right;"><a href="/api/health" target="_blank" style="color: var(--primary);">Test ↗</a></td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding: 10px 0;"><code>GET /api/map</code></td>
+          <td style="color: var(--text-muted);">Campus graph nodes, stairs, and accessible ramps</td>
+          <td style="text-align: right;"><a href="/api/map" target="_blank" style="color: var(--primary);">Test ↗</a></td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding: 10px 0;"><code>GET /api/navigation?destination=Library</code></td>
+          <td style="color: var(--text-muted);">A* step-free route generation for BVI / Wheelchair personas</td>
+          <td style="text-align: right;"><a href="/api/navigation?destination=Library" target="_blank" style="color: var(--primary);">Test ↗</a></td>
+        </tr>
+        <tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding: 10px 0;"><code>GET /api/safepath/hazards</code></td>
+          <td style="color: var(--text-muted);">Active reported hazards, wet floors & obstacle bypasses</td>
+          <td style="text-align: right;"><a href="/api/safepath/hazards" target="_blank" style="color: var(--primary);">Test ↗</a></td>
+        </tr>
+        <tr>
+          <td style="padding: 10px 0;"><code>POST /api/detect</code></td>
+          <td style="color: var(--text-muted);">Multipart image inference returning bounding boxes, depth & direction</td>
+          <td style="text-align: right;"><a href="/docs#/default/detect_api_detect_post" target="_blank" style="color: var(--primary);">Docs ↗</a></td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>💻 How to Run Locally</h3>
+      <pre><code># 1. Install Python dependencies
+pip install -r requirements.txt
+
+# 2. Launch FastAPI service
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# 3. Open in browser: http://localhost:8000/docs</code></pre>
+    </div>
+  </div>
+</body>
+</html>
