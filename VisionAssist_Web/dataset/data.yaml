@@ -1,0 +1,21 @@
+path: D:/VIT/SEM-3/mlops/cp/VisionAssist_Web_Complete/VisionAssist_Web/dataset
+train: images/train
+val: images/val
+test: images/test
+nc: 15
+names:
+- person
+- tree
+- car
+- bicycle
+- chair
+- table
+- backpack
+- bottle
+- door
+- stairs
+- lift
+- bench
+- classroom
+- laboratory
+- corridor

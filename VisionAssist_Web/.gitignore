@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+models/*.pt
+models/*.onnx
+models/exported/
+mlruns/
+runs/
+*.log
+.vscode/
+.idea/

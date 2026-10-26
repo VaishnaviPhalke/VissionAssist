@@ -1,0 +1,60 @@
+name: VisionAssist MLOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  mlops-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr libgl1-mesa-glx
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mlflow dvc onnx
+
+      - name: Step 1 - Dataset Preparation & Quality Audit
+        run: |
+          python mlops/dataset_prep.py
+
+      - name: Step 2 - Download / Verify Base Model Checkpoint
+        run: |
+          python scripts/download_model.py
+
+      - name: Step 3 - Run Automated Test Suite
+        run: |
+          python -m pytest tests/ -v
+
+      - name: Step 4 - Execute Model Validation Gate
+        run: |
+          python mlops/validate_gate.py
+
+      - name: Step 5 - Model Quantization & Edge Export Check
+        run: |
+          python mlops/export_quantize.py
+
+      - name: Upload MLOps Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlops-reports
+          path: |
+            runs/
+            models/exported/

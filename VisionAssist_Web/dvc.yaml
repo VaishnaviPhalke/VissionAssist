@@ -1,0 +1,33 @@
+stages:
+  prepare_dataset:
+    cmd: python mlops/dataset_prep.py
+    deps:
+      - mlops/dataset_prep.py
+      - data/classes.yaml
+    outs:
+      - dataset/data.yaml
+
+  train_model:
+    cmd: python mlops/train_mlflow.py
+    deps:
+      - mlops/train_mlflow.py
+      - dataset/data.yaml
+      - models/yolov8n.pt
+    outs:
+      - runs/
+
+  validate_gate:
+    cmd: python mlops/validate_gate.py
+    deps:
+      - mlops/validate_gate.py
+      - models/yolov8n.pt
+    outs:
+      - runs/validation_gate_report.json
+
+  export_quantize:
+    cmd: python mlops/export_quantize.py
+    deps:
+      - mlops/export_quantize.py
+      - models/yolov8n.pt
+    outs:
+      - runs/export_optimization_report.json

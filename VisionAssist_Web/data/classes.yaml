@@ -1,0 +1,28 @@
+# VisionAssist's planned campus classes. The bundled temporary detector is COCO-pretrained,
+# so only classes that exist in COCO are directly detectable until a 15-class model is trained.
+visionassist_target_classes:
+  - person
+  - tree
+  - car
+  - bicycle
+  - chair
+  - table
+  - backpack
+  - bottle
+  - door
+  - stairs
+  - lift
+  - bench
+  - classroom
+  - laboratory
+  - corridor
+
+coco_to_target:
+  person: person
+  bicycle: bicycle
+  car: car
+  chair: chair
+  dining table: table
+  backpack: backpack
+  bottle: bottle
+  bench: bench
