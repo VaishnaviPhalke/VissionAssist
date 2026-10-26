@@ -55,3 +55,4 @@ vision_assist_app/android/app/build/
 *.iml
 .DS_Store
 Thumbs.db
+*.cache

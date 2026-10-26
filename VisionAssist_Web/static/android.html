@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionAssist AI - Android Assistant Interface</title>
+  <style>
+    :root { --primary: #0C8B74; --bg: #F8FAFC; --text: #0F172A; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+    .container { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); overflow: hidden; }
+    .header { background: var(--primary); color: white; padding: 20px; text-align: center; }
+    .screen { padding: 20px; border-bottom: 1px solid #E2E8F0; }
+    .screen h3 { margin-top: 0; color: var(--primary); }
+    .btn { background: var(--primary); color: white; padding: 12px 24px; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; display: inline-block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>VisionAssist AI</h1>
+      <p>Native Android Assistant & SafePath Engine</p>
+    </div>
+
+    <!-- 01. Setup & Multilingual Onboarding -->
+    <div id="screen01" class="screen">
+      <h3>01. Setup & Languages</h3>
+      <p>Select Language:</p>
+      <button class="btn" data-lang="en-US">English</button>
+      <button class="btn" data-lang="hi-IN">हिन्दी (Hindi)</button>
+      <button class="btn" data-lang="mr-IN">मराठी (Marathi)</button>
+      <button class="btn" data-lang="es-ES">Español</button>
+      <button class="btn" data-lang="ta-IN">தமிழ் (Tamil)</button>
+      <br/><br/>
+      <button id="btnSetupToDetect" class="btn">Start Assistance</button>
+    </div>
+
+    <!-- 02. Home / Start Assistance -->
+    <div id="screen02" class="screen">
+      <h3>02. Home Assistance</h3>
+      <p>One-tap or voice trigger to start hands-free guidance.</p>
+    </div>
+
+    <!-- 03. Live SafePath Detection -->
+    <div id="screen03" class="screen">
+      <h3>03. Real-Time Detection</h3>
+      <p>YOLOv8-Nano 15-class campus obstacle detection with MiDaS depth estimation.</p>
+      <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:200px;background:#000;"></video>
+      <canvas id="cameraOverlay" style="display:none;"></canvas>
+      <div id="liveProximityHud">Proximity: Safe</div>
+      <script>function simulateObstacle(){}</script>
+    </div>
+
+    <!-- 04. Campus Navigation -->
+    <div id="screen04" class="screen">
+      <h3>04. Campus Navigation</h3>
+      <p>A* Graph routing with step-free wheelchair & BVI pathfinding.</p>
+    </div>
+
+    <!-- 05. Live Sign Reader (OCR) -->
+    <div id="screen05" class="screen">
+      <h3>05. Live Sign Reader (OCR)</h3>
+      <p>Google ML Kit on-device optical character recognition for room numbers and boards.</p>
+    </div>
+
+    <!-- 06. Nearby Hazards -->
+    <div id="screen06" class="screen">
+      <h3>06. Nearby Hazards</h3>
+      <p>Crowdsourced fleet spatial memory reporting temporary hazards.</p>
+    </div>
+
+    <!-- 07. Voice Commands -->
+    <div id="screen07" class="screen">
+      <h3>07. Voice Commands</h3>
+      <p>Native SpeechRecognizer voice input: "Go to library", "Detect", "Read Text".</p>
+    </div>
+
+    <!-- 08. Audio & Haptic Settings -->
+    <div id="screen08" class="screen">
+      <h3>08. Audio & Haptics</h3>
+      <p>Spatial audio panning and hardware vibration motor feedback.</p>
+    </div>
+
+    <!-- 09. Offline Model Health -->
+    <div id="screen09" class="screen">
+      <h3>09. Model Status</h3>
+      <p>YOLOv8-Nano 15-class INT8 model health and inference telemetry.</p>
+    </div>
+
+    <!-- 10. Activity History -->
+    <div id="screen10" class="screen">
+      <h3>10. Activity History</h3>
+      <p>Chronological obstacle and navigation history log.</p>
+    </div>
+
+    <!-- 11. Privacy & Safe-Mode -->
+    <div id="screen11" class="screen">
+      <h3>11. Privacy Controls</h3>
+      <p>Zero cloud video storage; on-device private inference guarantee.</p>
+    </div>
+
+    <!-- 12. Emergency SOS -->
+    <div id="screen12" class="screen">
+      <h3>12. Emergency SOS</h3>
+      <p>One-tap emergency call to Campus Security hotline (0199).</p>
+    </div>
+  </div>
+</body>
+</html>

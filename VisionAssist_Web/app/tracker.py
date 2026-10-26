@@ -140,12 +140,17 @@ class DecisionEngine:
 
             if cx < 0.35:
                 position = "to your left"
+                direction = "left"
             elif cx > 0.65:
                 position = "to your right"
+                direction = "right"
             else:
                 position = "ahead"
+                direction = "ahead"
 
             d["position"] = position
+            d["direction"] = direction
+            d["class"] = d.get("label", "obstacle")
             d["spatial_pan"] = spatial_pan
             enriched.append(d)
 
